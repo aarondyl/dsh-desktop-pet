@@ -1,0 +1,5 @@
+# 小深桌宠控制：/pet 命令 + 左侧栏「桌面助手」页（client.js）
+# 桌宠程序默认就是插件目录下的 pet/；想用别处的 pet.py，可加 config: { dir: /绝对路径 }
+- insert:
+    - id: pet-control
+      name: dsh-pet-control

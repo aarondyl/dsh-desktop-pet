@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "小深 desktop pet",
+    "description": "Open or close the 小深 desktop pet from the \"桌面助手\" sidebar entry or with /pet. The pet runs as its own process, so it stays on the desktop after Harness quits.",
+    "detail": "docs/DETAIL.md"
+  }
+}

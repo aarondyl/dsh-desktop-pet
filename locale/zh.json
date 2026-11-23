@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "小深桌宠控制",
+    "description": "在 Harness 左侧栏「桌面助手」或用 /pet 打开、关闭桌面上的小深；小深是独立进程，Harness 关掉后它仍在桌面上。",
+    "detail": "docs/DETAIL.md"
+  }
+}
