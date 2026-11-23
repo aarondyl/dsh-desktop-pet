@@ -20,16 +20,19 @@
 
 ## 安装
 
-在终端里运行（`desktop` 是 Harness 桌面版的配置名）：
+1. 先打开一次 DeepSeek Harness 并登录，然后**完全退出**它（⌘Q）——Harness 开着的时候 `dsh` 不允许改它的插件。
+2. 在终端里运行（`desktop` 是 Harness 桌面版的配置名）：
 
 ```sh
 "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" \
   plugin --profile desktop add github:aarondyl/dsh-desktop-pet
 ```
 
-然后**重启 DeepSeek Harness**（⌘Q 退出再打开）。
+3. 重新打开 DeepSeek Harness，左侧栏会多出「**桌面助手**」。
 
-更新到最新版：把上面的 `add` 换成 `update dsh-pet-control`；卸载：换成 `remove dsh-pet-control`。
+网页版 Harness 把 `--profile desktop` 换成 `--profile web`。
+
+更新到最新版：同样先退出 Harness，再把上面的命令原样跑一次；卸载：把 `add github:aarondyl/dsh-desktop-pet` 换成 `remove dsh-pet-control`。
 
 ## 使用
 
