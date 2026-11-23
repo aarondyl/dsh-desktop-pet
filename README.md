@@ -8,6 +8,7 @@
 - 支持拖入图片、⌘V 粘贴图片、截图提问
 - 点屏幕别处就收回成胶囊，回复收进 🔔
 - **独立进程**：在 Harness 里打开后，关掉 Harness 它也照样在桌面上
+- **皮肤**：在「桌面助手」页面一键换装（内置经典白、夜间、樱花、方块），也可以自己设计
 
 *A DeepSeek Harness plugin that puts a small floating chat pill on your macOS desktop. macOS only.*
 
@@ -59,6 +60,14 @@
 | 右键 | 新聊天 / 收起展开卡片 / 清空卡片 / 退出小深 |
 | `Esc` | 关面板 → 收输入栏 → 收卡片 |
 
+## 皮肤
+
+「桌面助手」页面下方是皮肤区，点一下缩略图就换上，桌面上的小深一秒内跟着变。
+
+自己设计：一套皮肤就是一个 JSON 文件，写颜色、圆角和字体。点「打开我的皮肤文件夹」（即 `~/.dsh-pet/skins/`），
+照着里面的格式说明和范例新建一个 `.json`，它就会出现在皮肤区。正在使用的皮肤改完保存会实时更新，方便边改边看。
+完整格式见 [pet/skins/README.md](pet/skins/README.md)。欢迎把你做的皮肤提 PR 到 `pet/skins/`。
+
 ## 它是怎么工作的
 
 每句话都在后台跑一次本机的 `dsh`（Harness 自带的命令行），用一个单独的配置 `dsh-pet`：
@@ -100,6 +109,7 @@ cordis.patch.yml   插件注册
 pet/pet.py         小深的界面（Python + Tk）
 pet/brain.py       小深的大脑（调用本机 dsh）
 pet/run.command    双击启动
+pet/skins/         内置皮肤和皮肤格式说明
 ```
 
 ## License

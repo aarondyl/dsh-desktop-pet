@@ -1,0 +1,31 @@
+{
+  "name": "樱花",
+  "author": "小深",
+  "description": "淡粉色，圆角更大一点",
+  "colors": {
+    "card": "#FFF7F9",
+    "border": "#F4D6DF",
+    "ink": "#4A2A35",
+    "muted": "#A77F8C",
+    "accent": "#F07EA0",
+    "accent_dark": "#D9607F",
+    "send_off": "#EBC6D1",
+    "chip": "#FCE8EE",
+    "badge": "#F8DCE5",
+    "error": "#D1453B",
+    "hover": "#FBE4EB",
+    "hover_strong": "#F7D3DE",
+    "button": "#5A3442",
+    "on_button": "#FFFFFF",
+    "stack": "#FDEFF3",
+    "placeholder": "#C9A3B0"
+  },
+  "shape": {
+    "card_radius": 28,
+    "panel_radius": 24,
+    "bar_radius": "round"
+  },
+  "font": {
+    "family": "PingFang SC"
+  }
+}

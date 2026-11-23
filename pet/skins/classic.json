@@ -1,0 +1,31 @@
+{
+  "name": "经典白",
+  "author": "小深",
+  "description": "默认皮肤，白色胶囊，参考 ChatGPT 桌面小窗",
+  "colors": {
+    "card": "#FFFFFF",
+    "border": "#E4E6EA",
+    "ink": "#1F2328",
+    "muted": "#8A919E",
+    "accent": "#2FC9A8",
+    "accent_dark": "#1FA88C",
+    "send_off": "#C9D2DC",
+    "chip": "#F1F2F4",
+    "badge": "#E6E8EC",
+    "error": "#D1453B",
+    "hover": "#ECEEF1",
+    "hover_strong": "#E3E6EA",
+    "button": "#2B2F36",
+    "on_button": "#FFFFFF",
+    "stack": "#F7F8FA",
+    "placeholder": "#AEB6C2"
+  },
+  "shape": {
+    "card_radius": 24,
+    "panel_radius": 20,
+    "bar_radius": "round"
+  },
+  "font": {
+    "family": "PingFang SC"
+  }
+}

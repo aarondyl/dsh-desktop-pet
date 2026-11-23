@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -59,6 +60,102 @@ ERR = "#D1453B"
 HOVER = "#ECEEF1"
 DARK = "#2B2F36"
 STACK_FILL = "#F7F8FA"
+ON_BUTTON = "#FFFFFF"     # 强调色 / 深色圆钮上的图标颜色
+PLACEHOLDER = "#AEB6C2"   # 输入栏提示字、面板里的浅灰字
+HOVER_STRONG = "#E3E6EA"  # 「↩ 接着聊」的悬停底
+CARD_R = 24               # 卡片圆角
+PANEL_R = 20              # ⊕ 面板圆角
+BAR_R = None              # 胶囊 / 输入栏圆角；None = 两头全圆
+FONT_FAMILY = "PingFang SC"
+
+
+def bar_r(h):
+    return h / 2 if BAR_R is None else min(BAR_R, h / 2)
+
+
+# ---------------------------------------------------------------- skins
+# 一套皮肤 = 一个 JSON 文件，见 skins/README.md。内置的在 pet/skins/，
+# 用户自己做的放 ~/.dsh-pet/skins/（插件更新不会覆盖；同名时用户的优先）。
+# 当前选中哪一套写在 ~/.dsh-pet/skin.json：{"skin": "<文件名去掉 .json>"}，
+# 桌面助手页面改的就是这个文件，小深每秒看一次，变了就换装重画。
+SKIN_TOKENS = {
+    "colors": {
+        "card": "CARD", "border": "BORDER", "ink": "INK", "muted": "MUTED",
+        "accent": "MINT", "accent_dark": "MINT_DARK", "send_off": "SEND_OFF",
+        "chip": "CHIP", "badge": "BADGE", "error": "ERR", "hover": "HOVER",
+        "hover_strong": "HOVER_STRONG", "button": "DARK", "on_button": "ON_BUTTON",
+        "stack": "STACK_FILL", "placeholder": "PLACEHOLDER",
+    },
+    "shape": {"card_radius": "CARD_R", "panel_radius": "PANEL_R", "bar_radius": "BAR_R"},
+    "font": {"family": "FONT_FAMILY"},
+}
+SKINS_BUILTIN = Path(__file__).resolve().parent / "skins"
+SKINS_USER = brain.APP_HOME / "skins"
+SKIN_CHOICE = brain.APP_HOME / "skin.json"
+DEFAULT_SKIN = "classic"
+_HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
+_SKIN_BASE = {name: globals()[name] for group in SKIN_TOKENS.values() for name in group.values()}
+
+
+def skin_files() -> dict:
+    found = {}
+    for folder in (SKINS_BUILTIN, SKINS_USER):   # 后面的覆盖前面的：用户皮肤优先
+        try:
+            for f in sorted(folder.glob("*.json")):
+                found[f.stem] = f
+        except OSError:
+            pass
+    return found
+
+
+def chosen_skin() -> str:
+    try:
+        sid = json.loads(SKIN_CHOICE.read_text(encoding="utf-8")).get("skin")
+        return sid if isinstance(sid, str) and sid else DEFAULT_SKIN
+    except (OSError, ValueError, AttributeError):
+        return DEFAULT_SKIN
+
+
+def skin_signature():
+    """选择文件和皮肤文件的修改时间：任何一个变了就重新换装（设计皮肤时改 JSON 也能实时看到）。"""
+    path = skin_files().get(chosen_skin())
+    sig = []
+    for f in (SKIN_CHOICE, path):
+        try:
+            sig.append(f.stat().st_mtime_ns if f else None)
+        except OSError:
+            sig.append(None)
+    return chosen_skin(), tuple(sig)
+
+
+def apply_skin(skin_id: str) -> str:
+    """先恢复默认，再把皮肤里写了的、合法的值盖上去；坏值忽略。返回实际生效的皮肤 id。"""
+    g = globals()
+    g.update(_SKIN_BASE)
+    path = skin_files().get(skin_id)
+    if path is None:
+        return DEFAULT_SKIN if skin_id != DEFAULT_SKIN else skin_id
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return DEFAULT_SKIN
+    if not isinstance(data, dict):
+        return DEFAULT_SKIN
+    for group, keys in SKIN_TOKENS.items():
+        section = data.get(group)
+        if not isinstance(section, dict):
+            continue
+        for key, name in keys.items():
+            v = section.get(key)
+            if group == "colors" and isinstance(v, str) and _HEX.match(v):
+                g[name] = v
+            elif group == "shape" and name == "BAR_R" and v == "round":
+                g[name] = None
+            elif group == "shape" and isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 40:
+                g[name] = v
+            elif group == "font" and isinstance(v, str) and v.strip():
+                g[name] = v.strip()
+    return skin_id
 
 TRANSPARENT = "systemTransparent"
 
@@ -297,7 +394,8 @@ def app_is_active() -> bool | None:
 
 
 # ---------------------------------------------------------------- icons
-def icon_edit(c, cx, cy, s=12, color=INK, tags=("pill",), width=1.3):
+def icon_edit(c, cx, cy, s=12, color=None, tags=("pill",), width=1.3):
+    color = color or INK
     """写作：右上角开口的圆角方框 + 一支斜着的笔。"""
     h = s / 2
     items = [rr(c, cx - h, cy - h + 1, cx + h - 1, cy + h, 3, "", color, width, tags)]
@@ -308,7 +406,8 @@ def icon_edit(c, cx, cy, s=12, color=INK, tags=("pill",), width=1.3):
     return items
 
 
-def icon_wave(c, cx, cy, s=11, color=INK, tags=("pill",), phase=0):
+def icon_wave(c, cx, cy, s=11, color=None, tags=("pill",), phase=0):
+    color = color or INK
     weights = (0.4, 0.7, 1.0, 0.7, 0.4)
     out = []
     gap = 2.8
@@ -321,7 +420,8 @@ def icon_wave(c, cx, cy, s=11, color=INK, tags=("pill",), phase=0):
     return out
 
 
-def icon_chevron(c, cx, cy, s=7, color=MUTED, tags=("pill",), up=False):
+def icon_chevron(c, cx, cy, s=7, color=None, tags=("pill",), up=False):
+    color = color or MUTED
     d = s * (1 if up else -1)
     c.create_line(cx - s, cy - d / 2, cx, cy + d / 2, fill=color, width=1.5,
                   capstyle="round", tags=tags)
@@ -329,7 +429,8 @@ def icon_chevron(c, cx, cy, s=7, color=MUTED, tags=("pill",), up=False):
                   capstyle="round", tags=tags)
 
 
-def icon_plus(c, cx, cy, s=6, color=INK, tags=()):
+def icon_plus(c, cx, cy, s=6, color=None, tags=()):
+    color = color or INK
     c.create_line(cx - s, cy, cx + s, cy, fill=color, width=1.8, capstyle="round", tags=tags)
     c.create_line(cx, cy - s, cx, cy + s, fill=color, width=1.8, capstyle="round", tags=tags)
 
@@ -338,25 +439,26 @@ def icon_send(c, cx, cy, r=15, enabled=True, tags=()):
     fill = MINT if enabled else SEND_OFF
     c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=fill, outline="", tags=tags)
     w = max(1.8, r * 0.14)
-    c.create_line(cx, cy + r * 0.46, cx, cy - r * 0.44, fill=CARD, width=w,
+    c.create_line(cx, cy + r * 0.46, cx, cy - r * 0.44, fill=ON_BUTTON, width=w,
                   capstyle="round", tags=tags)
-    c.create_line(cx - r * 0.34, cy - r * 0.12, cx, cy - r * 0.48, fill=CARD, width=w,
+    c.create_line(cx - r * 0.34, cy - r * 0.12, cx, cy - r * 0.48, fill=ON_BUTTON, width=w,
                   capstyle="round", tags=tags)
-    c.create_line(cx, cy - r * 0.48, cx + r * 0.34, cy - r * 0.12, fill=CARD, width=w,
+    c.create_line(cx, cy - r * 0.48, cx + r * 0.34, cy - r * 0.12, fill=ON_BUTTON, width=w,
                   capstyle="round", tags=tags)
 
 
 def badge_check(c, cx, cy, r=11, tags=()):
     c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=MINT, outline="", tags=tags)
     c.create_line(cx - r * 0.45, cy + r * 0.02, cx - r * 0.08, cy + r * 0.38,
-                  fill=CARD, width=max(1.8, r * 0.22), capstyle="round", tags=tags)
+                  fill=ON_BUTTON, width=max(1.8, r * 0.22), capstyle="round", tags=tags)
     c.create_line(cx - r * 0.08, cy + r * 0.38, cx + r * 0.48, cy - r * 0.34,
-                  fill=CARD, width=max(1.8, r * 0.22), capstyle="round", tags=tags)
+                  fill=ON_BUTTON, width=max(1.8, r * 0.22), capstyle="round", tags=tags)
 
 
 
 
-def icon_bell(c, cx, cy, color=INK, tags=()):
+def icon_bell(c, cx, cy, color=None, tags=()):
+    color = color or INK
     kw = dict(fill=color, width=1.3, capstyle="round", joinstyle="round", tags=tags)
     c.create_arc(cx - 4.5, cy - 7, cx + 4.5, cy + 2, start=0, extent=180, style="arc",
                  outline=color, width=1.3, tags=tags)
@@ -373,35 +475,38 @@ def badge_count(c, cx, cy, n, font, tags=()):
 
 def badge_error(c, cx, cy, r=9, font=None, tags=()):
     c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=ERR, outline="", tags=tags)
-    c.create_text(cx, cy, text="!", fill=CARD, font=font, tags=tags)
+    c.create_text(cx, cy, text="!", fill=ON_BUTTON, font=font, tags=tags)
 
 
-def icon_return(c, cx, cy, color=INK, tags=()):
+def icon_return(c, cx, cy, color=None, tags=()):
+    color = color or INK
     c.create_line(cx + 5, cy - 5, cx + 5, cy + 2, cx - 5, cy + 2, fill=color, width=1.6,
                   arrow="last", arrowshape=(5, 6, 3), capstyle="round", joinstyle="round", tags=tags)
 
 
 def icon_stop(c, cx, cy, r=15, tags=()):
     c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=DARK, outline="", tags=tags)
-    rr(c, cx - 5, cy - 5, cx + 5, cy + 5, 2, CARD, "", 0, tags)
+    rr(c, cx - 5, cy - 5, cx + 5, cy + 5, 2, ON_BUTTON, "", 0, tags)
 
 
 def btn_close(c, cx, cy, r=9, tags=()):
     c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=DARK, outline=CARD, width=1.5, tags=tags)
     d = r * 0.38
     for a, b in ((-d, -d), (-d, d)):
-        c.create_line(cx + a, cy + b, cx - a, cy - b, fill=CARD, width=1.6, capstyle="round", tags=tags)
+        c.create_line(cx + a, cy + b, cx - a, cy - b, fill=ON_BUTTON, width=1.6, capstyle="round", tags=tags)
 
 
 
-def icon_bubble(c, cx, cy, color=INK, tags=()):
+def icon_bubble(c, cx, cy, color=None, tags=()):
+    color = color or INK
     """对话气泡（历史对话）。"""
     rr(c, cx - 7, cy - 6, cx + 7, cy + 4, 5, "", color, 1.4, tags)
     c.create_line(cx - 3, cy + 4, cx - 5, cy + 8, cx + 1, cy + 4, fill=color, width=1.4,
                   joinstyle="round", tags=tags)
 
 
-def icon_crop(c, cx, cy, color=INK, tags=()):
+def icon_crop(c, cx, cy, color=None, tags=()):
+    color = color or INK
     """截图：四个角的取景框。"""
     kw = dict(fill=color, width=1.6, capstyle="round", joinstyle="round", tags=tags)
     s, k = 7, 4
@@ -410,14 +515,16 @@ def icon_crop(c, cx, cy, color=INK, tags=()):
         c.create_line(x, y - sy * k, x, y, x - sx * k, y, **kw)
 
 
-def icon_image(c, cx, cy, color=INK, tags=()):
+def icon_image(c, cx, cy, color=None, tags=()):
+    color = color or INK
     rr(c, cx - 7, cy - 6, cx + 7, cy + 6, 2.5, "", color, 1.4, tags)
     c.create_line(cx - 6, cy + 4, cx - 2, cy, cx + 1, cy + 3, cx + 3, cy + 1, cx + 6, cy + 4,
                   fill=color, width=1.4, joinstyle="round", tags=tags)
     c.create_oval(cx + 1.5, cy - 4, cx + 4.5, cy - 1, fill=color, outline="", tags=tags)
 
 
-def icon_app(c, cx, cy, color=INK, tags=()):
+def icon_app(c, cx, cy, color=None, tags=()):
+    color = color or INK
     """打开完整版：一个窗口 + 右上角往外的箭头。"""
     rr(c, cx - 7, cy - 5, cx + 5, cy + 7, 2.5, "", color, 1.4, tags)
     c.create_line(cx - 1, cy + 1, cx + 7, cy - 7, fill=color, width=1.4, capstyle="round", tags=tags)
@@ -648,6 +755,8 @@ class Pet:
         self.down = True
         self._win = (PILL_W, BAR_H, 0)  # 上次的 (w, h, bar_y)
         prune_uploads()
+        self.skin = apply_skin(chosen_skin())   # 字体要用皮肤里的字体名，所以在建字体之前换装
+        self._skin_sig = skin_signature()
 
         self.root = tk.Tk()
         self.root.withdraw()
@@ -659,12 +768,12 @@ class Pet:
         except tk.TclError:
             self.root.config(bg="#FFFFFF")
 
-        self.font = tkfont.Font(family="PingFang SC", size=13)
+        self.font = tkfont.Font(family=FONT_FAMILY, size=13)
         # 卡片标题：常规字重（用户嫌粗体太粗；Tk 只能选常规/粗体，选不到 PingFang 的 Medium），
         # 靠深色 + 比正文大一号来和灰色正文区分
-        self.font_bold = tkfont.Font(family="PingFang SC", size=14)
-        self.font_small = tkfont.Font(family="PingFang SC", size=12)
-        self.font_tiny = tkfont.Font(family="PingFang SC", size=9, weight="bold")
+        self.font_bold = tkfont.Font(family=FONT_FAMILY, size=14)
+        self.font_small = tkfont.Font(family=FONT_FAMILY, size=12)
+        self.font_tiny = tkfont.Font(family=FONT_FAMILY, size=9, weight="bold")
         self.lh = self.font_small.metrics("linespace")
 
         self.canvas = tk.Canvas(self.root, width=PILL_W, height=BAR_H, bg=TRANSPARENT,
@@ -813,7 +922,7 @@ class Pet:
         mid = (y1 + y2) / 2
         # 图标中心：20 / 60 / 101，分隔线在 41 / 81（照 ChatGPT 桌面助手的比例量的）
         ex, wx, bx = x1 + 21, x1 + 61, x1 + 101
-        rr(c, x1, y1, x2, y2, (y2 - y1) / 2, CARD, BORDER, 1, ("pill",))
+        rr(c, x1, y1, x2, y2, bar_r(y2 - y1), CARD, BORDER, 1, ("pill",))
         self.solid.append((x1, y1, x2, y2))
         icon_edit(c, ex, mid, 12, INK, tags=("pill", "icon"))
         c.create_line(x1 + 41, mid - 7, x1 + 41, mid + 7, fill=BORDER, width=1, tags=("pill",))
@@ -846,7 +955,7 @@ class Pet:
         x1, x2 = 8, w - 4
         y1, y2 = by + 4, by + BAR_H - 4
         cy = (y1 + y2) / 2
-        rr(c, x1, y1, x2, y2, (y2 - y1) / 2, CARD, BORDER, 1, ("input",))
+        rr(c, x1, y1, x2, y2, bar_r(y2 - y1), CARD, BORDER, 1, ("input",))
         self.solid.append((x1, y1, x2, y2))
         c.create_oval(x1 + 6, cy - 11, x1 + 28, cy + 11, fill=HOVER if self.panel_open else CHIP,
                       outline="", tags=("input",))
@@ -887,14 +996,14 @@ class Pet:
         self.panel_open = False
         if self.entry is None:
             self.entry = tk.Entry(self.canvas, font=self.font, bg=CARD, relief="flat", bd=0,
-                                  highlightthickness=0, insertbackground=INK)
+                                  highlightthickness=0, insertbackground=INK, fg=INK)
             self.entry.bind("<KeyRelease>", self.on_key)
             self.entry.bind("<Return>", lambda e: self.on_return())
             self.entry.bind("<Escape>", lambda e: (self.on_escape(), "break")[1])
             self.entry.bind("<Down>", lambda e: (self.move_sel(1), "break")[1])
             self.entry.bind("<Up>", lambda e: (self.move_sel(-1), "break")[1])
             self.entry.bind("<Command-v>", self.on_paste)
-            self.hint = tk.Label(self.canvas, font=self.font, bg=CARD, fg="#AEB6C2",
+            self.hint = tk.Label(self.canvas, font=self.font, bg=CARD, fg=PLACEHOLDER,
                                  anchor="w", padx=2)
             self.hint.bind("<Button-1>", lambda e: self._focus_force())
         self.render()
@@ -993,7 +1102,7 @@ class Pet:
 
     def _draw_panel(self, x1, y1, x2, y2) -> None:
         c = self.canvas
-        self._panel_bg = rr(c, x1, y1, x2, y2, 20, CARD, BORDER, 1, ("panel",))
+        self._panel_bg = rr(c, x1, y1, x2, y2, PANEL_R, CARD, BORDER, 1, ("panel",))
         self.solid.append((x1, y1, x2, y2))
         y = y1 + 8
         for j, r in enumerate(self.panel_rows):
@@ -1004,7 +1113,7 @@ class Pet:
                               fill=MUTED, tags=("panel",))
             elif r["kind"] == "note":
                 c.create_text(x1 + 18, cy, text=r["text"], anchor="w", font=self.font_small,
-                              fill="#AEB6C2", tags=("panel",))
+                              fill=PLACEHOLDER, tags=("panel",))
             else:
                 self.boxes[f"item:{j}"] = (x1 + 6, y + 1, x2 - 6, y + h - 1)
                 self.zones.append((f"item:{j}", x1, y, x2, y + h))
@@ -1015,14 +1124,14 @@ class Pet:
                 right = x2 - 16
                 if r["meta"]:
                     c.create_text(right, cy, text=r["meta"], anchor="e", font=self.font_small,
-                                  fill="#AEB6C2", tags=("panel",))
+                                  fill=PLACEHOLDER, tags=("panel",))
                     right -= self.font_small.measure(r["meta"]) + 12
                 if r["desc"]:
                     nx = x1 + 44 + min(name_w, self.font.measure(r["name"])) + 10
                     room = right - nx
                     if room > 30:
                         c.create_text(nx, cy, text=wrap_text(self.font_small, r["desc"], room, 1)[0],
-                                      anchor="w", font=self.font_small, fill="#AEB6C2",
+                                      anchor="w", font=self.font_small, fill=PLACEHOLDER,
                                       tags=("panel",))
             y += h
 
@@ -1161,7 +1270,7 @@ class Pet:
             rr(c, *box, 12, STACK_FILL, BORDER, 1, ("card",))
             self.zones.append(("stack", *box))
             self.solid.append(box)
-        rr(c, x1, y1, x2, y2, min(24, (y2 - y1) / 2), CARD, BORDER, 1, ("card",))
+        rr(c, x1, y1, x2, y2, min(CARD_R, (y2 - y1) / 2), CARD, BORDER, 1, ("card",))
         self.boxes[f"card:{i}"] = (x1, y1, x2, y2)
         self.solid.append((x1 - 6, y1 - 6, x2, y2))   # 含左上角 × 按钮探出去的那一块
         self.zones.append((f"card:{i}", x1, y1, x2, y2))
@@ -1219,7 +1328,7 @@ class Pet:
                                fill=CARD, outline="", tags=("hov",))
             rx = x2 - 62 if t.running else x2 - 26
             c.create_oval(rx - 15, cy - 15, rx + 15, cy + 15,
-                          fill="#E3E6EA" if kind == "reply" else HOVER, outline="", tags=("hov",))
+                          fill=HOVER_STRONG if kind == "reply" else HOVER, outline="", tags=("hov",))
             icon_return(c, rx, cy, INK, tags=("hov",))
             if t.running:
                 icon_stop(c, x2 - 26, cy, 15, tags=("hov",))
@@ -1621,6 +1730,21 @@ class Pet:
             pass
         self.root.after(40, self.hover_poll)
 
+    def _check_skin(self) -> None:
+        """桌面助手页面换了皮肤，或者设计者改了皮肤 JSON：换装、改字体、整窗重画。"""
+        sig = skin_signature()
+        if sig == self._skin_sig:
+            return
+        self._skin_sig = sig
+        self.skin = apply_skin(sig[0])
+        for f in (self.font, self.font_bold, self.font_small, self.font_tiny):
+            f.configure(family=FONT_FAMILY)
+        if self.entry is not None:
+            self.entry.config(bg=CARD, fg=INK, insertbackground=INK)
+        if self.hint is not None:
+            self.hint.config(bg=CARD, fg=PLACEHOLDER)
+        self.render()
+
     def _watch_outside_click(self, on_pet: bool) -> None:
         """点空白处收回（第十三轮重写）。
 
@@ -1645,6 +1769,8 @@ class Pet:
         self._ticks += 1
         if self._ticks % 8 == 0:
             keep_floating()   # 偶尔有东西（Tk 的 -topmost、deiconify）会把层级改回去
+        if self._ticks % 4 == 0:
+            self._check_skin()
         # 点空白处收回：小深从「当前 App」变成「不是」的那一下
         active = app_is_active()
         if active is not None:

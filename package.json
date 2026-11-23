@@ -1,6 +1,6 @@
 {
   "name": "dsh-pet-control",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "小深：DeepSeek Harness 的 macOS 桌面小助手。侧栏一键打开/关闭，Harness 关掉后它仍然留在桌面上。",
@@ -19,9 +19,11 @@
     "docs/DETAIL.md",
     "pet/pet.py",
     "pet/brain.py",
-    "pet/run.command",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "pet/run.command",
+    "pet/skins/*.json",
+    "pet/skins/README.md"
   ],
   "dsh": {
     "bundle": {

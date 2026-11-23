@@ -5,7 +5,8 @@
  * 所以 DeepSeek Harness 关掉之后，小深仍然留在桌面上。
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -146,12 +147,120 @@ export function apply(ctx, config) {
 
 const API_PREFIX = '/pet-control/api'
 
+// ---------------------------------------------------------------- skins
+// 和 pet.py 里的约定一致：内置皮肤在 <dir>/skins/，用户皮肤在 ~/.dsh-pet/skins/（同名用户优先），
+// 当前选择写在 ~/.dsh-pet/skin.json。小深每秒看一次这个文件，变了就自己换装。
+const DEFAULT_SKIN = 'classic'
+const SKIN_ID = /^[A-Za-z0-9_\-一-鿿]{1,64}$/
+
+function appHome() {
+  return process.env.DSH_PET_HOME || path.join(os.homedir(), '.dsh-pet')
+}
+
+function userSkinsDir() {
+  return path.join(appHome(), 'skins')
+}
+
+function skinFiles(dir) {
+  const found = new Map()
+  for (const [folder, builtin] of [[path.join(dir, 'skins'), true], [userSkinsDir(), false]]) {
+    let names = []
+    try { names = readdirSync(folder) } catch { continue }
+    for (const name of names.sort()) {
+      if (!name.endsWith('.json')) continue
+      const id = name.slice(0, -5)
+      if (SKIN_ID.test(id)) found.set(id, { file: path.join(folder, name), builtin })
+    }
+  }
+  return found
+}
+
+function currentSkin() {
+  try {
+    const id = JSON.parse(readFileSync(path.join(appHome(), 'skin.json'), 'utf8')).skin
+    return typeof id === 'string' && id ? id : DEFAULT_SKIN
+  } catch {
+    return DEFAULT_SKIN
+  }
+}
+
+function listSkins(dir) {
+  const skins = []
+  for (const [id, { file, builtin }] of skinFiles(dir)) {
+    let data
+    try { data = JSON.parse(readFileSync(file, 'utf8')) } catch { data = null }
+    if (!data || typeof data !== 'object') {
+      skins.push({ id, name: id, builtin, broken: true })
+      continue
+    }
+    const str = (v) => (typeof v === 'string' ? v.slice(0, 200) : '')
+    skins.push({
+      id,
+      builtin,
+      name: str(data.name) || id,
+      author: str(data.author),
+      description: str(data.description),
+      colors: data.colors && typeof data.colors === 'object' ? data.colors : {},
+      shape: data.shape && typeof data.shape === 'object' ? data.shape : {},
+    })
+  }
+  const order = (s) => (s.id === DEFAULT_SKIN ? 0 : s.builtin ? 1 : 2)
+  skins.sort((a, b) => order(a) - order(b))
+  const current = currentSkin()
+  return { current: skins.some((s) => s.id === current) ? current : DEFAULT_SKIN, skins, userDir: userSkinsDir() }
+}
+
+function chooseSkin(dir, id) {
+  if (typeof id !== 'string' || !skinFiles(dir).has(id)) {
+    return { kind: 'error', text: `没有叫「${id}」的皮肤。` }
+  }
+  try {
+    const data = JSON.parse(readFileSync(skinFiles(dir).get(id).file, 'utf8'))
+    if (!data || typeof data !== 'object') throw new Error('not an object')
+  } catch {
+    return { kind: 'error', text: `「${id}」这个皮肤文件不是合法的 JSON，先修好它再选。` }
+  }
+  mkdirSync(appHome(), { recursive: true })
+  writeFileSync(path.join(appHome(), 'skin.json'), JSON.stringify({ skin: id }) + '\n')
+  return { kind: 'success', text: running(dir) ? '换好了，看看桌面上的小深～' : '选好了，下次打开小深就是这套皮肤。' }
+}
+
+function openSkinsFolder(dir) {
+  const target = userSkinsDir()
+  mkdirSync(target, { recursive: true })
+  // 第一次打开时放一份格式说明和一个可以照着改的范例
+  const guide = path.join(dir, 'skins', 'README.md')
+  const example = path.join(dir, 'skins', 'sakura.json')
+  if (existsSync(guide) && !existsSync(path.join(target, 'README.md'))) copyFileSync(guide, path.join(target, 'README.md'))
+  if (existsSync(example) && !existsSync(path.join(target, 'my-skin.json.example'))) {
+    copyFileSync(example, path.join(target, 'my-skin.json.example'))
+  }
+  spawn('open', [target], { detached: true, stdio: 'ignore' }).unref()
+  return { kind: 'success', text: `已在访达打开 ${target}` }
+}
+
+function readBody(req, limit = 4096) {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const chunks = []
+    req.on('data', (chunk) => {
+      size += chunk.length
+      if (size > limit) { reject(new Error('body too large')); req.destroy?.(); return }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}) } catch { resolve({}) }
+    })
+    req.on('error', reject)
+  })
+}
+
 function writeJson(res, status, body) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
   res.end(JSON.stringify(body))
 }
 
-function handleApi(ctx, dir, req, res) {
+async function handleApi(ctx, dir, req, res) {
   // 和 Harness 自己的界面走同一道门：登录、Host/Origin 校验都交给 connection 服务，
   // 不自己判断（照 dsh-better-sidebar 的写法）。只收 POST，免得被网页用 <img> 之类触发。
   if (ctx.connection.requestRejection(req) !== undefined) {
@@ -166,6 +275,21 @@ function handleApi(ctx, dir, req, res) {
   const action = pathname.slice(API_PREFIX.length + 1)
   try {
     let result
+    if (action === 'skins') {
+      writeJson(res, 200, { ok: true, ...listSkins(dir) })
+      return
+    }
+    if (action === 'skin') {
+      const body = await readBody(req)
+      const r = chooseSkin(dir, body?.id)
+      writeJson(res, r.kind === 'error' ? 400 : 200, { ok: r.kind !== 'error', message: r.text, ...listSkins(dir) })
+      return
+    }
+    if (action === 'skins-folder') {
+      const r = openSkinsFolder(dir)
+      writeJson(res, 200, { ok: true, message: r.text })
+      return
+    }
     if (action === 'status') result = { kind: 'success', text: running(dir) ? '小深在桌面上陪着你。' : '小深现在不在。' }
     else if (action === 'open') result = openPet(dir)
     else if (action === 'close') result = closePet(dir)

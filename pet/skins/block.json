@@ -1,0 +1,31 @@
+{
+  "name": "方块",
+  "author": "小深",
+  "description": "小圆角，干净利落",
+  "colors": {
+    "card": "#FAFAF7",
+    "border": "#D9D9D2",
+    "ink": "#1C1C1A",
+    "muted": "#85857C",
+    "accent": "#3B6FF5",
+    "accent_dark": "#2A55C9",
+    "send_off": "#C8CCD6",
+    "chip": "#EFEFEA",
+    "badge": "#E8E8E2",
+    "error": "#D1453B",
+    "hover": "#EDEDE7",
+    "hover_strong": "#E4E4DD",
+    "button": "#1C1C1A",
+    "on_button": "#FFFFFF",
+    "stack": "#F3F3EF",
+    "placeholder": "#A8A89F"
+  },
+  "shape": {
+    "card_radius": 8,
+    "panel_radius": 8,
+    "bar_radius": 8
+  },
+  "font": {
+    "family": "PingFang SC"
+  }
+}

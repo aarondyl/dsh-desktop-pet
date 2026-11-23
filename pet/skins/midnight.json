@@ -1,0 +1,31 @@
+{
+  "name": "夜间",
+  "author": "小深",
+  "description": "深色，晚上不刺眼",
+  "colors": {
+    "card": "#1F2228",
+    "border": "#343840",
+    "ink": "#ECEEF1",
+    "muted": "#8E95A2",
+    "accent": "#2FC9A8",
+    "accent_dark": "#1FA88C",
+    "send_off": "#4A505A",
+    "chip": "#2B2F36",
+    "badge": "#3A3F48",
+    "error": "#F06A60",
+    "hover": "#2C3038",
+    "hover_strong": "#363B44",
+    "button": "#E6E8EC",
+    "on_button": "#1F2228",
+    "stack": "#181A1F",
+    "placeholder": "#6B7280"
+  },
+  "shape": {
+    "card_radius": 24,
+    "panel_radius": 20,
+    "bar_radius": "round"
+  },
+  "font": {
+    "family": "PingFang SC"
+  }
+}
