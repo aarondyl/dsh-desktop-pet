@@ -116,16 +116,84 @@ def chosen_skin() -> str:
         return DEFAULT_SKIN
 
 
+# 伙伴：站在胶囊左边的像素小角色。一个伙伴 = 一张 PNG（可选同名 .json 写名字和介绍）。
+# 内置在 pet/companions/，用户的放 ~/.dsh-pet/companions/；选择也记在 skin.json 的 "companion"。
+COMPANIONS_BUILTIN = Path(__file__).resolve().parent / "companions"
+COMPANIONS_USER = brain.APP_HOME / "companions"
+NO_COMPANION = "none"
+SPRITE_TARGET_H = 46    # 伙伴显示高度大约这么高（像素图按整数倍放大，保持像素锐利）
+SPRITE_MAX = (84, 64)   # 最大显示宽高；更大的图会按整数步长抽样缩小
+
+
+def companion_files() -> dict:
+    found = {}
+    for folder in (COMPANIONS_BUILTIN, COMPANIONS_USER):
+        try:
+            for f in sorted(folder.glob("*.png")):
+                found[f.stem] = f
+        except OSError:
+            pass
+    return found
+
+
+def _choice() -> dict:
+    try:
+        d = json.loads(SKIN_CHOICE.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def chosen_companion() -> str:
+    cid = _choice().get("companion")
+    return cid if isinstance(cid, str) and cid else NO_COMPANION
+
+
 def skin_signature():
-    """选择文件和皮肤文件的修改时间：任何一个变了就重新换装（设计皮肤时改 JSON 也能实时看到）。"""
-    path = skin_files().get(chosen_skin())
+    """选择文件、皮肤文件、伙伴图的修改时间：任何一个变了就重新换装（设计时改文件也能实时看到）。"""
+    sid, cid = chosen_skin(), chosen_companion()
     sig = []
-    for f in (SKIN_CHOICE, path):
+    for f in (SKIN_CHOICE, skin_files().get(sid), companion_files().get(cid)):
         try:
             sig.append(f.stat().st_mtime_ns if f else None)
         except OSError:
             sig.append(None)
-    return chosen_skin(), tuple(sig)
+    return sid, cid, tuple(sig)
+
+
+def load_sprite(path: Path) -> dict | None:
+    """PNG → 一组色块。macOS 上 Tk 的透明窗口画不出位图，但画得出矩形：
+    逐像素读出颜色（读图不受影响），同一行相邻同色的像素合并成一个矩形。"""
+    try:
+        img = tk.PhotoImage(file=str(path))
+    except tk.TclError:
+        return None
+    try:
+        iw, ih = img.width(), img.height()
+        if not iw or not ih:
+            return None
+        step = max(1, math.ceil(max(iw / SPRITE_MAX[0], ih / SPRITE_MAX[1])))
+        sw, sh = iw // step, ih // step
+        scale = max(1, min(round(SPRITE_TARGET_H / sh), SPRITE_MAX[1] // sh, SPRITE_MAX[0] // sw))
+        runs = []
+        for y in range(sh):
+            run_x, run_c = 0, None
+            for x in range(sw + 1):
+                col = None
+                if x < sw:
+                    px, py = x * step, y * step
+                    if not img.transparency_get(px, py):
+                        r, g, b = img.get(px, py)[:3]
+                        col = f"#{r:02x}{g:02x}{b:02x}"
+                if col != run_c:
+                    if run_c is not None:
+                        runs.append((run_x * scale, y * scale, x * scale, (y + 1) * scale, run_c))
+                    run_x, run_c = x, col
+        if not runs:
+            return None
+        return {"w": sw * scale, "h": sh * scale, "runs": runs}
+    finally:
+        img = None
 
 
 def apply_skin(skin_id: str) -> str:
@@ -757,6 +825,11 @@ class Pet:
         prune_uploads()
         self.skin = apply_skin(chosen_skin())   # 字体要用皮肤里的字体名，所以在建字体之前换装
         self._skin_sig = skin_signature()
+        self._sprite_key = ("stale",)
+        self._sprite = None
+        self._bob_n = 0
+        self._bob = 0           # 思考时伙伴上下跳的当前偏移
+        self._cw = 0            # 为伙伴在左边多出来的那一列宽度
 
         self.root = tk.Tk()
         self.root.withdraw()
@@ -868,17 +941,26 @@ class Pet:
         blocks, stack = self._blocks()
         gap = 8
         wide = bool(blocks) or self.mode == "input"
-        w = W if wide else PILL_W
+        base = W if wide else PILL_W
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
 
+        # 伙伴站在栏的左边、脚踩栏的底边。栏左边已经有空地（胶囊 + 卡片时）就不加宽；
+        # 否则在窗口左边多加一列。比栏高出来的部分在上面留出 top。
+        sp = self.sprite()
+        bar_left = 8 if self.mode == "input" else base - 4 - (PILL_W - 8)
+        cw = max(0, sp["w"] + 6 + 4 - bar_left) if sp else 0
+        top = max(0, sp["h"] - (BAR_H - 4)) if sp else 0
+        self._cw = cw
+        w = base + cw
+
         if not blocks:
-            bar_y, total = 0, BAR_H
+            bar_y, total = top, top + BAR_H
             self.down = True
         else:
             extra = sum(h for h, _ in blocks) + gap * (len(blocks) - 1) + stack + 4 + 6
             self.down = self.anchor[1] + BAR_H + extra <= sh - 8
-            bar_y = 0 if self.down else extra       # 放不下就整体翻到栏上方
-            total = BAR_H + extra
+            bar_y = top if self.down else max(extra, top)   # 放不下就整体翻到栏上方
+            total = bar_y + BAR_H + (extra if self.down else 0)
 
         x = max(0, min(self.anchor[0] - w, sw - w))
         y = max(0, self.anchor[1] - bar_y)
@@ -889,13 +971,13 @@ class Pet:
         had_focus = self.entry is not None and self.root.focus_get() == self.entry
         c.delete("all")
         self.zones, self.icon_xy, self.boxes, self.solid = [], {}, {}, []
-        cur = BAR_H + 4 if self.down else bar_y - 4
+        cur = bar_y + BAR_H + 4 if self.down else bar_y - 4
         for h, draw in blocks:
             if self.down:
-                draw(8, cur, w - 4, cur + h)
+                draw(8 + cw, cur, w - 4, cur + h)
                 cur += h + gap
             else:
-                draw(8, cur - h, w - 4, cur)
+                draw(8 + cw, cur - h, w - 4, cur)
                 cur -= h + gap
         if self.mode == "input":
             self._draw_input(bar_y, w)
@@ -903,7 +985,38 @@ class Pet:
                 self.entry.focus_set()
         else:
             self._draw_pill(bar_y, w)
+        if sp:
+            self._draw_sprite(sp, bar_left + cw - 6 - sp["w"], bar_y + BAR_H - 4 - sp["h"])
         self._draw_hover()
+
+    def sprite(self) -> dict | None:
+        cid = chosen_companion()
+        path = companion_files().get(cid) if cid != NO_COMPANION else None
+        try:
+            key = (str(path), path.stat().st_mtime_ns) if path else None
+        except OSError:
+            key = None
+        if key != self._sprite_key:
+            self._sprite_key = key
+            self._sprite = load_sprite(path) if key else None
+        return self._sprite
+
+    def _draw_sprite(self, sp: dict, x0: float, y0: float) -> None:
+        c = self.canvas
+        self._bob = 0
+        for x1, y1, x2, y2, col in sp["runs"]:
+            c.create_rectangle(x0 + x1, y0 + y1, x0 + x2, y0 + y2, fill=col, outline="", tags=("buddy",))
+        box = (x0, y0, x0 + sp["w"], y0 + sp["h"])
+        self.solid.append(box)
+        self.zones.append(("buddy", *box))
+
+    def _bob_step(self, running: bool) -> None:
+        """思考时伙伴一上一下（每两拍换一次），停下就落回原位。"""
+        self._bob_n += 1
+        want = (-2 if (self._bob_n // 2) % 2 else 0) if running else 0
+        if want != self._bob:
+            self.canvas.move("buddy", 0, want - self._bob)
+            self._bob = want
 
     def _place(self) -> None:
         """拖动时只挪窗口，不重画。"""
@@ -952,7 +1065,7 @@ class Pet:
     # ----------------------------------------------------------------- input
     def _draw_input(self, by: int, w: int) -> None:
         c = self.canvas
-        x1, x2 = 8, w - 4
+        x1, x2 = 8 + self._cw, w - 4
         y1, y2 = by + 4, by + BAR_H - 4
         cy = (y1 + y2) / 2
         rr(c, x1, y1, x2, y2, bar_r(y2 - y1), CARD, BORDER, 1, ("input",))
@@ -1443,7 +1556,7 @@ class Pet:
         key = self.hit(event.x, event.y)
         kind, _, idx = (key or "").partition(":")
         t = self.tasks[int(idx)] if idx.isdigit() and int(idx) < len(self.tasks) else self.front
-        if key == "edit":
+        if key in ("edit", "buddy"):
             self.open_input(None)
         elif key == "wave":
             self.open_input(self.front if self.front and not self.cards_hidden else None)
@@ -1737,6 +1850,7 @@ class Pet:
             return
         self._skin_sig = sig
         self.skin = apply_skin(sig[0])
+        self._sprite_key = ("stale",)   # 不能用 None：None 本身表示「没有伙伴」
         for f in (self.font, self.font_bold, self.font_small, self.font_tiny):
             f.configure(family=FONT_FAMILY)
         if self.entry is not None:
@@ -1778,7 +1892,12 @@ class Pet:
                 if self.mode == "input" or self.cards_visible() or self.list_open:
                     self.collapse()
             self._was_active = active
-        if any(t.running for t in self.tasks):
+        running = any(t.running for t in self.tasks)
+        try:
+            self._bob_step(running)
+        except tk.TclError:
+            pass
+        if running:
             self.phase = (self.phase + 1) % 5
             try:
                 self._draw_wave()

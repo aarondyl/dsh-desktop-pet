@@ -175,13 +175,78 @@ function skinFiles(dir) {
   return found
 }
 
-function currentSkin() {
+function readChoice() {
   try {
-    const id = JSON.parse(readFileSync(path.join(appHome(), 'skin.json'), 'utf8')).skin
-    return typeof id === 'string' && id ? id : DEFAULT_SKIN
+    const d = JSON.parse(readFileSync(path.join(appHome(), 'skin.json'), 'utf8'))
+    return d && typeof d === 'object' && !Array.isArray(d) ? d : {}
   } catch {
-    return DEFAULT_SKIN
+    return {}
   }
+}
+
+// skin.json 里同时记着配色和伙伴：改一个时保留另一个
+function writeChoice(patch) {
+  mkdirSync(appHome(), { recursive: true })
+  writeFileSync(path.join(appHome(), 'skin.json'), JSON.stringify({ ...readChoice(), ...patch }) + '\n')
+}
+
+function currentSkin() {
+  const id = readChoice().skin
+  return typeof id === 'string' && id ? id : DEFAULT_SKIN
+}
+
+// ---------------------------------------------------------------- companions
+// 伙伴 = 一张 PNG 像素图（可选同名 .json：name / author / description）。
+// 内置 <dir>/companions/，用户 ~/.dsh-pet/companions/。页面用 data: URL 显示，图不大（限 512KB）。
+const NO_COMPANION = 'none'
+const SPRITE_BYTES = 512 * 1024
+
+function userCompanionsDir() {
+  return path.join(appHome(), 'companions')
+}
+
+function companionFiles(dir) {
+  const found = new Map()
+  for (const [folder, builtin] of [[path.join(dir, 'companions'), true], [userCompanionsDir(), false]]) {
+    let names = []
+    try { names = readdirSync(folder) } catch { continue }
+    for (const name of names.sort()) {
+      if (!name.toLowerCase().endsWith('.png')) continue
+      const id = name.slice(0, -4)
+      if (SKIN_ID.test(id) && id !== NO_COMPANION) found.set(id, { file: path.join(folder, name), builtin })
+    }
+  }
+  return found
+}
+
+function listCompanions(dir) {
+  const list = []
+  for (const [id, { file, builtin }] of companionFiles(dir)) {
+    let meta = {}
+    try { meta = JSON.parse(readFileSync(file.slice(0, -4) + '.json', 'utf8')) || {} } catch {}
+    const str = (v) => (typeof v === 'string' ? v.slice(0, 200) : '')
+    let image = ''
+    try {
+      const buf = readFileSync(file)
+      if (buf.length <= SPRITE_BYTES) image = 'data:image/png;base64,' + buf.toString('base64')
+    } catch {}
+    const order = typeof meta.order === 'number' ? meta.order : 999
+    list.push({ id, builtin, order, name: str(meta.name) || id, author: str(meta.author), description: str(meta.description), image })
+  }
+  // 内置在前，再按 .json 里可选的 order 排（没写就排后面），最后按 id
+  list.sort((a, b) => Number(b.builtin) - Number(a.builtin) || a.order - b.order || a.id.localeCompare(b.id))
+  const cur = readChoice().companion
+  const companion = typeof cur === 'string' && list.some((c) => c.id === cur) ? cur : NO_COMPANION
+  return { companion, companions: list, companionsDir: userCompanionsDir() }
+}
+
+function chooseCompanion(dir, id) {
+  if (id !== NO_COMPANION && (typeof id !== 'string' || !companionFiles(dir).has(id))) {
+    return { kind: 'error', text: `没有叫「${id}」的伙伴。` }
+  }
+  writeChoice({ companion: id })
+  const who = id === NO_COMPANION ? '只留胶囊' : '换好伙伴了'
+  return { kind: 'success', text: running(dir) ? `${who}，看看桌面上的小深～` : `选好了，下次打开小深就是这样。` }
 }
 
 function listSkins(dir) {
@@ -220,9 +285,17 @@ function chooseSkin(dir, id) {
   } catch {
     return { kind: 'error', text: `「${id}」这个皮肤文件不是合法的 JSON，先修好它再选。` }
   }
-  mkdirSync(appHome(), { recursive: true })
-  writeFileSync(path.join(appHome(), 'skin.json'), JSON.stringify({ skin: id }) + '\n')
+  writeChoice({ skin: id })
   return { kind: 'success', text: running(dir) ? '换好了，看看桌面上的小深～' : '选好了，下次打开小深就是这套皮肤。' }
+}
+
+function openCompanionsFolder(dir) {
+  const target = userCompanionsDir()
+  mkdirSync(target, { recursive: true })
+  const guide = path.join(dir, 'companions', 'README.md')
+  if (existsSync(guide) && !existsSync(path.join(target, 'README.md'))) copyFileSync(guide, path.join(target, 'README.md'))
+  spawn('open', [target], { detached: true, stdio: 'ignore' }).unref()
+  return { kind: 'success', text: `已在访达打开 ${target}，把 PNG 像素图放进去就行。` }
 }
 
 function openSkinsFolder(dir) {
@@ -276,13 +349,24 @@ async function handleApi(ctx, dir, req, res) {
   try {
     let result
     if (action === 'skins') {
-      writeJson(res, 200, { ok: true, ...listSkins(dir) })
+      writeJson(res, 200, { ok: true, ...listSkins(dir), ...listCompanions(dir) })
+      return
+    }
+    if (action === 'companion') {
+      const body = await readBody(req)
+      const r = chooseCompanion(dir, body?.id)
+      writeJson(res, r.kind === 'error' ? 400 : 200, { ok: r.kind !== 'error', message: r.text, ...listSkins(dir), ...listCompanions(dir) })
+      return
+    }
+    if (action === 'companions-folder') {
+      const r = openCompanionsFolder(dir)
+      writeJson(res, 200, { ok: true, message: r.text })
       return
     }
     if (action === 'skin') {
       const body = await readBody(req)
       const r = chooseSkin(dir, body?.id)
-      writeJson(res, r.kind === 'error' ? 400 : 200, { ok: r.kind !== 'error', message: r.text, ...listSkins(dir) })
+      writeJson(res, r.kind === 'error' ? 400 : 200, { ok: r.kind !== 'error', message: r.text, ...listSkins(dir), ...listCompanions(dir) })
       return
     }
     if (action === 'skins-folder') {
