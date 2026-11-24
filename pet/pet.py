@@ -365,60 +365,6 @@ HANDLE_ALPHA = 0.45      # 平时半透明；鼠标放上去变成不透明
 HOTKEY_PRESSES: list = []   # 快捷键回调只往这里记一笔，hover_poll 取走后再动界面
 
 
-# 访达右键菜单扩展（finder-menu/）发来的指令：show / hide / toggle / ask。
-# 扩展在沙盒里，只能用「分布式通知」和小深说话；回调同样只记一笔。
-EXTERNAL_CMDS: list = []
-NOTE_TOGGLE = "com.xiaoshen.pet.toggle"
-NOTE_ASK = "com.xiaoshen.pet.ask"
-NOTE_STATE = "com.xiaoshen.pet.state"
-
-
-class _DistNotes:
-    """CoreFoundation 的分布式通知中心：收扩展的指令，广播小深现在显示还是隐藏。"""
-
-    def __init__(self):
-        import ctypes as C
-        self.C = C
-        cf = C.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
-        self.cf = cf
-        cf.CFNotificationCenterGetDistributedCenter.restype = C.c_void_p
-        cf.CFStringCreateWithCString.argtypes = [C.c_void_p, C.c_char_p, C.c_uint32]
-        cf.CFStringCreateWithCString.restype = C.c_void_p
-        cf.CFStringGetCString.argtypes = [C.c_void_p, C.c_char_p, C.c_long, C.c_uint32]
-        cf.CFStringGetCString.restype = C.c_bool
-        self.CB = C.CFUNCTYPE(None, C.c_void_p, C.c_void_p, C.c_void_p, C.c_void_p, C.c_void_p)
-        cf.CFNotificationCenterAddObserver.argtypes = [C.c_void_p, C.c_void_p, self.CB, C.c_void_p, C.c_void_p, C.c_long]
-        cf.CFNotificationCenterPostNotification.argtypes = [C.c_void_p, C.c_void_p, C.c_void_p, C.c_void_p, C.c_bool]
-        self.center = cf.CFNotificationCenterGetDistributedCenter()
-        self._strs = {}
-
-    def cfstr(self, text: str):
-        if text not in self._strs:   # 常驻：CF 字符串交出去以后不释放
-            self._strs[text] = self.cf.CFStringCreateWithCString(None, text.encode(), 0x08000100)
-        return self._strs[text]
-
-    def pystr(self, ref) -> str:
-        if not ref:
-            return ""
-        buf = self.C.create_string_buffer(64)
-        return buf.value.decode() if self.cf.CFStringGetCString(ref, buf, 64, 0x08000100) else ""
-
-    def listen(self) -> None:
-        def on_note(_center, _observer, name, obj, _info):
-            # 同 HOTKEY_PRESSES：这是在 Tk 事件循环里被调用的，绝不能碰 Tk
-            n = self.pystr(name)
-            EXTERNAL_CMDS.append("ask" if n == NOTE_ASK else (self.pystr(obj) or "toggle"))
-        cb = self.CB(on_note)
-        _KEEP.append(cb)
-        for name in (NOTE_TOGGLE, NOTE_ASK):
-            # 4 = CFNotificationSuspensionBehaviorDeliverImmediately：小深在后台也立即送达
-            self.cf.CFNotificationCenterAddObserver(self.center, None, cb, self.cfstr(name), None, 4)
-
-    def post_state(self, hidden: bool) -> None:
-        self.cf.CFNotificationCenterPostNotification(
-            self.center, self.cfstr(NOTE_STATE), self.cfstr("hidden" if hidden else "shown"), None, True)
-
-
 def register_hotkey() -> str | None:
     """用 Carbon 的 RegisterEventHotKey 注册系统级快捷键：不需要「辅助功能」/「输入监控」权限
     （监听任意按键才需要；登记一个固定组合不需要）。返回生效的组合名，全被占用 / 失败返回 None。
@@ -978,11 +924,6 @@ class Pet:
         self.menu.add_separator()
         self.hidden = False
         self.hotkey = register_hotkey()
-        try:
-            self.notes = _DistNotes()
-            self.notes.listen()
-        except Exception:
-            self.notes = None
         self.menu.add_command(label="隐藏桌面助手", accelerator=self.hotkey or "", command=self.hide)
         self.menu.add_command(label="退出小深", command=self.quit)
         # 隐藏时右键小圆点的菜单
@@ -1771,7 +1712,6 @@ class Pet:
         self._handle_hot = None
         self.render()          # 缩成小圆点（见 render 开头）
         self.save()
-        self._post_state()
 
     def show(self, focus: bool = True) -> None:
         """叫出来；focus=True 时顺手打开输入栏（像 Codex 的 ⌥Space：显示并聚焦）。"""
@@ -1788,14 +1728,6 @@ class Pet:
         if focus:
             self.open_input(None)
         self.save()
-        self._post_state()
-
-    def _post_state(self) -> None:
-        if self.notes is not None:
-            try:
-                self.notes.post_state(self.hidden)
-            except Exception:
-                pass
 
     def toggle_visible(self) -> None:
         if self.hidden:
@@ -2032,16 +1964,6 @@ class Pet:
         if HOTKEY_PRESSES:
             HOTKEY_PRESSES.clear()   # 一次按键可能连发几个事件，合并成一次
             self.toggle_visible()
-        while EXTERNAL_CMDS:
-            cmd = EXTERNAL_CMDS.pop(0)
-            if cmd == "show":
-                self.show(focus=False)
-            elif cmd == "hide":
-                self.hide()
-            elif cmd == "toggle":
-                self.toggle_visible() if not self.hidden else self.show(focus=False)
-            else:
-                self._post_state()   # "ask"：访达扩展刚启动，问现在的状态（show/hide 自己会广播）
         try:
             px, py = self.root.winfo_pointerxy()
             lx, ly = px - self.root.winfo_rootx(), py - self.root.winfo_rooty()
