@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import ctypes
 import json
 import math
 import os
@@ -352,6 +353,10 @@ def keep_floating(w=None) -> None:
             o.send(None, win, "setCanHide:", False, argtypes=[c.c_bool])  # ⌘H / 「隐藏其他」不藏它
     except Exception:
         pass
+
+
+class _NSPoint(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
 
 
 _KEEP: list = []        # 交给 Objective-C 的 Python 回调必须一直持有，否则会被回收后崩溃
@@ -874,6 +879,7 @@ class Pet:
         self._move_job = None
         self._btn_prev = False
         self._handle_hot = None
+        self._nswin = None
         self.solid: list[tuple] = []      # 画出来的实体区域（窗口坐标）；其余透明处鼠标穿透
         self._through = False             # 当前是否 ignoresMouseEvents
         self.down = True
@@ -1119,12 +1125,35 @@ class Pet:
             self._bob = want
 
     def _place(self) -> None:
-        """拖动时只挪窗口，不重画。"""
+        """拖动时只挪窗口，不重画。
+
+        第十九轮：不再用 Tk 的 geometry。它不会立刻挪窗口，要等 Tk 下一轮空闲才生效，
+        再加上拖动本身也排在空闲里，窗口总比鼠标慢一到两帧、而且时快时慢——这就是拖动时的抖。
+        实测：geometry 调用后 119/120 次位置还没到（差 3~6px）；直接 setFrameOrigin 0/120，
+        而且 Tk 自己会跟上（winfo_rootx/rooty 120/120 都对）。拿不到 NSWindow 时退回 geometry。
+        """
         w, h, bar_y = self._win
         sw = self.root.winfo_screenwidth()
         x = max(0, min(self.anchor[0] - w, sw - w))
         y = max(0, self.anchor[1] - bar_y)
-        self.root.geometry(f"{w}x{h}+{x}+{y}")
+        if not self._move_native(x, y, h):
+            self.root.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _move_native(self, x: int, y: int, h: int) -> bool:
+        """直接让 AppKit 把窗口挪到 Tk 坐标 (x, y)（左上角、y 向下）。Cocoa 的原点在主屏左下、y 向上。"""
+        try:
+            o = objc()
+            if self._nswin is None:
+                wins = list(o.windows())
+                if not wins:
+                    return False
+                self._nswin = wins[0]
+            o.send(None, self._nswin, "setFrameOrigin:",
+                   _NSPoint(x, self.root.winfo_screenheight() - y - h), argtypes=[_NSPoint])
+            return True
+        except Exception:
+            self._nswin = None
+            return False
 
     # ------------------------------------------------------------------ pill
     def _draw_pill(self, by: int, w: int) -> None:
@@ -1624,9 +1653,10 @@ class Pet:
             pass
 
     def on_drag(self, _event=None) -> None:
-        if self._drag is None or self._move_job is not None:
+        # 当场就挪（不再排到 after_idle）：setFrameOrigin 只要零点几毫秒，跟手比合并事件重要
+        if self._drag is None:
             return
-        self._move_job = self.root.after_idle(self._drag_step)
+        self._drag_step()
 
     def _drag_step(self) -> None:
         self._move_job = None
