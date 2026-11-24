@@ -74,7 +74,11 @@ function petEnv() {
 }
 
 function openPet(dir) {
-  if (running(dir)) return { kind: 'success', text: '小深已经在桌面上了～' }
+  if (running(dir)) {
+    // 藏起来了就叫出来，而不是说「已经在了」
+    if (petState().hidden) return signalPet(dir, '-USR1')
+    return { kind: 'success', text: '小深已经在桌面上了～' }
+  }
   if (!existsSync(petScript(dir))) {
     return { kind: 'error', text: `找不到桌宠程序：${petScript(dir)}` }
   }
@@ -121,7 +125,7 @@ export function apply(ctx, config) {
       if (action === 'status' || action === '状态') {
         return {
           kind: 'success',
-          text: running(dir) ? '小深在桌面上陪着你。' : '小深现在不在。',
+          text: !running(dir) ? '小深现在不在。' : petState().hidden ? `小深藏起来了${petState().hotkey ? `，按 ${petState().hotkey} 叫它出来` : ''}。` : '小深在桌面上陪着你。',
         }
       }
       if (action === 'toggle') return running(dir) ? closePet(dir) : openPet(dir)
@@ -312,6 +316,25 @@ function openSkinsFolder(dir) {
   return { kind: 'success', text: `已在访达打开 ${target}` }
 }
 
+// 小深自己把「是否隐藏」「快捷键」写在 ~/.dsh-pet/state.json 里
+function petState() {
+  try {
+    const d = JSON.parse(readFileSync(path.join(appHome(), 'state.json'), 'utf8'))
+    return { hidden: d.hidden === true, hotkey: typeof d.hotkey === 'string' ? d.hotkey : null }
+  } catch {
+    return { hidden: false, hotkey: null }
+  }
+}
+
+// 显示 / 隐藏：给正在跑的小深发信号（pet.py 里 SIGUSR1 = 显示，SIGUSR2 = 隐藏）
+function signalPet(dir, sig) {
+  if (!running(dir)) return { kind: 'error', text: '小深没有在运行，先点「打开小深」。' }
+  try {
+    execFileSync('pkill', [sig, '-f', petScript(dir)], { stdio: 'ignore' })
+  } catch {}
+  return { kind: 'success', text: sig === '-USR1' ? '小深出来了。' : '小深藏起来了，按快捷键或回这里就能叫出来。' }
+}
+
 function readBody(req, limit = 4096) {
   return new Promise((resolve, reject) => {
     let size = 0
@@ -348,6 +371,15 @@ async function handleApi(ctx, dir, req, res) {
   const action = pathname.slice(API_PREFIX.length + 1)
   try {
     let result
+    if (action === 'show' || action === 'hide') {
+      const r = signalPet(dir, action === 'show' ? '-USR1' : '-USR2')
+      // 小深收到信号后才改 state.json，这里直接报目标状态，页面之后轮询会纠正
+      writeJson(res, r.kind === 'error' ? 400 : 200, {
+        ok: r.kind !== 'error', running: running(dir), ...petState(),
+        ...(r.kind === 'error' ? {} : { hidden: action === 'hide' }), message: r.text,
+      })
+      return
+    }
     if (action === 'skins') {
       writeJson(res, 200, { ok: true, ...listSkins(dir), ...listCompanions(dir) })
       return
@@ -374,7 +406,7 @@ async function handleApi(ctx, dir, req, res) {
       writeJson(res, 200, { ok: true, message: r.text })
       return
     }
-    if (action === 'status') result = { kind: 'success', text: running(dir) ? '小深在桌面上陪着你。' : '小深现在不在。' }
+    if (action === 'status') result = { kind: 'success', text: !running(dir) ? '小深现在不在。' : petState().hidden ? `小深藏起来了${petState().hotkey ? `，按 ${petState().hotkey} 叫它出来` : ''}。` : '小深在桌面上陪着你。' }
     else if (action === 'open') result = openPet(dir)
     else if (action === 'close') result = closePet(dir)
     else {
@@ -384,7 +416,7 @@ async function handleApi(ctx, dir, req, res) {
     // 刚 pkill 时进程还在退出，pgrep 仍会找到它；open/close 成功就直接报目标状态，页面之后会轮询纠正
     const ok = result.kind !== 'error'
     const now = action === 'status' || !ok ? running(dir) : action === 'open'
-    writeJson(res, 200, { ok, running: now, message: result.text })
+    writeJson(res, 200, { ok, running: now, ...petState(), ...(!now || (ok && action === 'open') ? { hidden: false } : {}), message: result.text })
   } catch (error) {
     writeJson(res, 500, { ok: false, error: String(error?.message ?? error) })
   }

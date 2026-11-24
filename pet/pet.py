@@ -355,6 +355,58 @@ def keep_floating(w=None) -> None:
 
 
 _KEEP: list = []        # 交给 Objective-C 的 Python 回调必须一直持有，否则会被回收后崩溃
+
+# 显示 / 隐藏小深的全局快捷键。按顺序试，第一个没被别的 App 占用的生效
+# （⌥Space 是 Codex 的默认键，装了 Codex 就会被占，退到 ⌃⌥Space）。
+# Carbon 修饰键：cmdKey 256，shiftKey 512，optionKey 2048，controlKey 4096；49 = 空格键。
+HOTKEYS = [("⌥Space", 49, 2048), ("⌃⌥Space", 49, 2048 | 4096)]
+
+
+def register_hotkey(on_press) -> str | None:
+    """用 Carbon 的 RegisterEventHotKey 注册系统级快捷键：不需要「辅助功能」/「输入监控」权限
+    （监听任意按键才需要；登记一个固定组合不需要）。返回生效的组合名，全被占用 / 失败返回 None。
+    kEventHotKeyExclusive：别的 App 已经独占了这个组合就注册失败，于是能退到下一个。"""
+    import ctypes as C
+    try:
+        carbon = C.CDLL("/System/Library/Frameworks/Carbon.framework/Carbon")
+    except OSError:
+        return None
+
+    class Spec(C.Structure):
+        _fields_ = [("cls", C.c_uint32), ("kind", C.c_uint32)]
+
+    class HotKeyID(C.Structure):
+        _fields_ = [("sig", C.c_uint32), ("id", C.c_uint32)]
+
+    four = lambda s: int.from_bytes(s.encode(), "big")
+    HANDLER = C.CFUNCTYPE(C.c_int32, C.c_void_p, C.c_void_p, C.c_void_p)
+
+    def handler(_call, _event, _data):
+        try:
+            on_press()
+        except Exception:
+            pass
+        return 0
+
+    cb = HANDLER(handler)
+    _KEEP.append(cb)
+    carbon.GetApplicationEventTarget.restype = C.c_void_p
+    target = carbon.GetApplicationEventTarget()
+    carbon.InstallEventHandler.argtypes = [C.c_void_p, HANDLER, C.c_ulong, C.POINTER(Spec), C.c_void_p, C.c_void_p]
+    carbon.InstallEventHandler.restype = C.c_int32
+    spec = Spec(four("keyb"), 5)   # kEventClassKeyboard / kEventHotKeyPressed
+    _KEEP.append(spec)
+    if carbon.InstallEventHandler(target, cb, 1, C.byref(spec), None, None) != 0:
+        return None
+    carbon.RegisterEventHotKey.argtypes = [C.c_uint32, C.c_uint32, HotKeyID, C.c_void_p, C.c_uint32,
+                                           C.POINTER(C.c_void_p)]
+    carbon.RegisterEventHotKey.restype = C.c_int32
+    for label, code, mods in HOTKEYS:
+        ref = C.c_void_p()
+        if carbon.RegisterEventHotKey(code, mods, HotKeyID(four("xsdp"), 1), target, 1, C.byref(ref)) == 0:
+            _KEEP.append(ref)
+            return label
+    return None
 DROPS: list = []        # 拖进来的东西：("file", 路径) / ("data", 路径)；Pet.poll 取走
 
 
@@ -866,6 +918,9 @@ class Pet:
         self.menu.add_command(label="收起 / 展开卡片", command=self.toggle_cards)
         self.menu.add_command(label="清空卡片", command=self.clear_tasks)
         self.menu.add_separator()
+        self.hidden = False
+        self.hotkey = register_hotkey(lambda: self.root.after(0, self.toggle_visible))
+        self.menu.add_command(label="隐藏桌面助手", accelerator=self.hotkey or "", command=self.hide)
         self.menu.add_command(label="退出小深", command=self.quit)
 
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
@@ -1597,6 +1652,41 @@ class Pet:
     def _end_modal(self) -> None:
         self._modal = max(0, self._modal - 1)
 
+    # ------------------------------------------------------------ hide / show
+    def hide(self) -> None:
+        """藏起来（进程照常跑，回复照常收）：快捷键、或 Harness 的「桌面助手」页面能叫回来。"""
+        if self.hidden:
+            return
+        if self.mode == "input":
+            self.close_input()
+        self.panel_open = self.list_open = False
+        self.hover = None
+        self.hidden = True
+        self._set_click_through(False)
+        self.root.withdraw()
+        self.save()
+
+    def show(self, focus: bool = True) -> None:
+        """叫出来；focus=True 时顺手打开输入栏（像 Codex 的 ⌥Space：显示并聚焦）。"""
+        if not self.hidden:
+            if focus and self.mode != "input":
+                self.open_input(None)
+            return
+        self.hidden = False
+        self.root.deiconify()
+        self.root.update_idletasks()
+        make_chromeless(self.root)   # deiconify 会把层级、标题栏样式改回去，和截图回来时一样重新设一遍
+        self.render()
+        if focus:
+            self.open_input(None)
+        self.save()
+
+    def toggle_visible(self) -> None:
+        if self.hidden:
+            self.show()
+        else:
+            self.hide()
+
     def toggle_cards(self) -> None:
         if not self.tasks:
             return
@@ -1823,6 +1913,9 @@ class Pet:
         穿透时 Tk 收不到任何鼠标事件，所以用定时器直接问系统鼠标在哪，回到实体区域
         就立刻关掉穿透。拖动中、弹菜单/文件框时不穿透。
         """
+        if self.hidden:
+            self.root.after(120, self.hover_poll)
+            return
         try:
             px, py = self.root.winfo_pointerxy()
             lx, ly = px - self.root.winfo_rootx(), py - self.root.winfo_rooty()
@@ -1918,6 +2011,8 @@ class Pet:
             "version": 2,
             "anchor_tr": self.anchor,
             "cards_hidden": self.cards_hidden,
+            "hidden": self.hidden,          # 给 Harness 的「桌面助手」页面看
+            "hotkey": self.hotkey,
             "tasks": [t.to_dict() for t in self.tasks if not t.running],
             "history": self.history[:HISTORY_KEEP],
             "messages": self.messages[-40:],
@@ -2011,6 +2106,10 @@ def main() -> None:
     # Python 的信号处理只在解释器跑 Python 代码时执行；tick 每 260ms 跑一次，足够及时。
     signal.signal(signal.SIGTERM, lambda *_: pet.root.after(0, pet.quit))
     signal.signal(signal.SIGHUP, signal.SIG_IGN)   # 启动它的终端/宿主关了也不受影响
+    # Harness「桌面助手」页面的「显示 / 隐藏」按钮：插件用 pkill -USR1 / -USR2 通知
+    signal.signal(signal.SIGUSR1, lambda *_: pet.root.after(0, lambda: pet.show(focus=False)))
+    signal.signal(signal.SIGUSR2, lambda *_: pet.root.after(0, pet.hide))
+    pet.save()   # 刚启动一定是显示的，把上次留下的 hidden 清掉
     pet.root.after(150, pet.poll)
     pet.root.after(260, pet.tick)
     pet.root.after(300, pet.hover_poll)

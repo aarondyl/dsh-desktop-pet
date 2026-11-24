@@ -174,13 +174,13 @@ window.__ModuleLoader__.load({
     }
 
     function Page() {
-      const [st, setSt] = useState({ running: null, busy: false })
+      const [st, setSt] = useState({ running: null, hidden: false, hotkey: null, busy: false })
       const [data, setData] = useState({ skins: [], current: null, companions: [], companion: null })
       const [msg, setMsg] = useState({ text: '', error: false })
       const [pending, setPending] = useState(null)
 
       const refreshStatus = useCallback(() => {
-        call('status').then((b) => setSt((s) => (s.busy ? s : { running: b.running, busy: false }))).catch(() => {})
+        call('status').then((b) => setSt((s) => (s.busy ? s : { running: b.running, hidden: !!b.hidden, hotkey: b.hotkey || null, busy: false }))).catch(() => {})
       }, [])
       const refreshList = useCallback(() => {
         call('skins').then((b) => setData({ skins: b.skins || [], current: b.current, companions: b.companions || [], companion: b.companion })).catch(() => {})
@@ -196,13 +196,16 @@ window.__ModuleLoader__.load({
       const say = (text, error) => setMsg({ text: text || '', error: !!error })
       const take = (b) => setData({ skins: b.skins || [], current: b.current, companions: b.companions || [], companion: b.companion })
 
-      const toggle = () => {
-        const action = st.running ? 'close' : 'open'
+      const act = (action) => {
         setSt((s) => ({ ...s, busy: true }))
         call(action)
-          .then((b) => { setSt({ running: b.running, busy: false }); say(b.ok ? '' : b.message, !b.ok) })
+          .then((b) => {
+            setSt({ running: b.running, hidden: !!b.hidden, hotkey: b.hotkey || null, busy: false })
+            say(b.ok && action !== 'show' && action !== 'hide' ? '' : b.message, !b.ok)
+          })
           .catch((e) => { setSt((s) => ({ ...s, busy: false })); say(e.message, true) })
       }
+      const toggle = () => act(st.running ? 'close' : 'open')
       const choose = (kind, id) => {
         if (pending) return
         if ((kind === 'companion' && id === data.companion) || (kind === 'skin' && id === data.current)) return
@@ -228,10 +231,16 @@ window.__ModuleLoader__.load({
         h('div', null,
           h('h1', { style: { fontSize: 34, fontWeight: 500, margin: 0, letterSpacing: 0.5 } }, LABEL),
           h('p', { style: { margin: '12px 0 0', fontSize: 15, opacity: 0.65, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
-            h('span', { style: { width: 8, height: 8, borderRadius: 4, background: on ? '#3DBF64' : '#C9CDD4', display: 'inline-block' } }),
-            !known ? '正在查看…' : on ? '小深在桌面上' : '小深没有在运行',
-            h('span', { style: { opacity: 0.8 } }, '· 关掉 DeepSeek Harness 它也会一直在'))),
-        h(GreyButton, { onClick: toggle, disabled: st.busy || !known }, st.busy ? '请稍候…' : on ? '关闭小深' : '打开小深')),
+            h('span', { style: { width: 8, height: 8, borderRadius: 4, background: on && !st.hidden ? '#3DBF64' : on ? '#E0B341' : '#C9CDD4', display: 'inline-block' } }),
+            !known ? '正在查看…' : !on ? '小深没有在运行' : st.hidden ? '小深藏起来了' : '小深在桌面上',
+            on && st.hotkey
+              ? h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 } }, '· 按',
+                  h('kbd', { style: { fontFamily: 'inherit', fontSize: 14, padding: '3px 10px', borderRadius: 999, background: MUTED_BG } }, st.hotkey),
+                  st.hidden ? '显示' : '隐藏 / 显示')
+              : h('span', { style: { opacity: 0.8 } }, '· 关掉 DeepSeek Harness 它也会一直在'))),
+        h('div', { style: { display: 'flex', gap: 8 } },
+          on ? h(GreyButton, { onClick: () => act(st.hidden ? 'show' : 'hide'), disabled: st.busy }, st.hidden ? '显示小深' : '隐藏小深') : null,
+          h(GreyButton, { onClick: toggle, disabled: st.busy || !known }, st.busy ? '请稍候…' : on ? '关闭小深' : '打开小深'))),
       msg.text ? h('p', { style: { margin: '14px 0 0', fontSize: 13, color: msg.error ? '#D1453B' : 'inherit', opacity: msg.error ? 1 : 0.6 } }, msg.text) : null,
 
       // 伙伴
@@ -279,7 +288,7 @@ window.__ModuleLoader__.load({
 
       h('p', { style: { marginTop: 40, opacity: 0.5, fontSize: 12, lineHeight: 1.7 } },
         '伙伴是一张 PNG 像素图（16~24 像素见方最好），配色是一个 JSON 文件；放进对应文件夹就会出现在这里，文件夹里有说明。',
-        h('br'), '也可以在对话框里用 /pet open、/pet close、/pet status。'))
+        h('br'), '右键小深也能「隐藏桌面助手」。也可以在对话框里用 /pet open、/pet close、/pet status。'))
     }
 
     function apply(ctx) {
