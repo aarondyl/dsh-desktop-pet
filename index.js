@@ -125,7 +125,7 @@ export function apply(ctx, config) {
       if (action === 'status' || action === '状态') {
         return {
           kind: 'success',
-          text: !running(dir) ? '小深现在不在。' : petState().hidden ? `小深藏起来了${petState().hotkey ? `，按 ${petState().hotkey} 叫它出来` : ''}。` : '小深在桌面上陪着你。',
+          text: !running(dir) ? '小深现在不在。' : petState().hidden ? `小深缩成了一个小圆点${petState().hotkey ? `，点它或按 ${petState().hotkey} 叫它出来` : '，点它就能叫出来'}。` : '小深在桌面上陪着你。',
         }
       }
       if (action === 'toggle') return running(dir) ? closePet(dir) : openPet(dir)
@@ -332,7 +332,7 @@ function signalPet(dir, sig) {
   try {
     execFileSync('pkill', [sig, '-f', petScript(dir)], { stdio: 'ignore' })
   } catch {}
-  return { kind: 'success', text: sig === '-USR1' ? '小深出来了。' : '小深藏起来了，按快捷键或回这里就能叫出来。' }
+  return { kind: 'success', text: sig === '-USR1' ? '小深出来了。' : '小深缩成了一个小圆点：点它、右键它，或按快捷键就能叫出来。' }
 }
 
 function readBody(req, limit = 4096) {
@@ -406,7 +406,7 @@ async function handleApi(ctx, dir, req, res) {
       writeJson(res, 200, { ok: true, message: r.text })
       return
     }
-    if (action === 'status') result = { kind: 'success', text: !running(dir) ? '小深现在不在。' : petState().hidden ? `小深藏起来了${petState().hotkey ? `，按 ${petState().hotkey} 叫它出来` : ''}。` : '小深在桌面上陪着你。' }
+    if (action === 'status') result = { kind: 'success', text: !running(dir) ? '小深现在不在。' : petState().hidden ? `小深缩成了一个小圆点${petState().hotkey ? `，点它或按 ${petState().hotkey} 叫它出来` : '，点它就能叫出来'}。` : '小深在桌面上陪着你。' }
     else if (action === 'open') result = openPet(dir)
     else if (action === 'close') result = closePet(dir)
     else {

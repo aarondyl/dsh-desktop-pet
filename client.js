@@ -288,7 +288,7 @@ window.__ModuleLoader__.load({
 
       h('p', { style: { marginTop: 40, opacity: 0.5, fontSize: 12, lineHeight: 1.7 } },
         '伙伴是一张 PNG 像素图（16~24 像素见方最好），配色是一个 JSON 文件；放进对应文件夹就会出现在这里，文件夹里有说明。',
-        h('br'), '右键小深也能「隐藏桌面助手」。也可以在对话框里用 /pet open、/pet close、/pet status。'))
+        h('br'), '右键小深 →「隐藏桌面助手」会让它缩成一个半透明小圆点；点圆点、右键圆点或按快捷键都能叫回来。也可以在对话框里用 /pet open、/pet close、/pet status。'))
     }
 
     function apply(ctx) {
