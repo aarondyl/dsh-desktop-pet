@@ -360,9 +360,10 @@ _KEEP: list = []        # 交给 Objective-C 的 Python 回调必须一直持有
 # （⌥Space 是 Codex 的默认键，装了 Codex 就会被占，退到 ⌃⌥Space）。
 # Carbon 修饰键：cmdKey 256，shiftKey 512，optionKey 2048，controlKey 4096；49 = 空格键。
 HOTKEYS = [("⌥Space", 49, 2048), ("⌃⌥Space", 49, 2048 | 4096)]
+HOTKEY_PRESSES: list = []   # 快捷键回调只往这里记一笔，hover_poll 取走后再动界面
 
 
-def register_hotkey(on_press) -> str | None:
+def register_hotkey() -> str | None:
     """用 Carbon 的 RegisterEventHotKey 注册系统级快捷键：不需要「辅助功能」/「输入监控」权限
     （监听任意按键才需要；登记一个固定组合不需要）。返回生效的组合名，全被占用 / 失败返回 None。
     kEventHotKeyExclusive：别的 App 已经独占了这个组合就注册失败，于是能退到下一个。"""
@@ -382,10 +383,10 @@ def register_hotkey(on_press) -> str | None:
     HANDLER = C.CFUNCTYPE(C.c_int32, C.c_void_p, C.c_void_p, C.c_void_p)
 
     def handler(_call, _event, _data):
-        try:
-            on_press()
-        except Exception:
-            pass
+        # 这个回调是在 Tk 的事件循环「里面」被系统调用的（tkinter 此时放开了 GIL、拿着 Tcl 锁）。
+        # 在这里调用任何 Tk 函数（包括 root.after）都会重入 tkinter，Python 直接崩溃——
+        # 第十七轮的第一版就是这样：按 ⌥Space 小深「消失」其实是进程崩了。只记一笔，别的都不做。
+        HOTKEY_PRESSES.append(time.monotonic())
         return 0
 
     cb = HANDLER(handler)
@@ -919,7 +920,7 @@ class Pet:
         self.menu.add_command(label="清空卡片", command=self.clear_tasks)
         self.menu.add_separator()
         self.hidden = False
-        self.hotkey = register_hotkey(lambda: self.root.after(0, self.toggle_visible))
+        self.hotkey = register_hotkey()
         self.menu.add_command(label="隐藏桌面助手", accelerator=self.hotkey or "", command=self.hide)
         self.menu.add_command(label="退出小深", command=self.quit)
 
@@ -1913,8 +1914,11 @@ class Pet:
         穿透时 Tk 收不到任何鼠标事件，所以用定时器直接问系统鼠标在哪，回到实体区域
         就立刻关掉穿透。拖动中、弹菜单/文件框时不穿透。
         """
+        if HOTKEY_PRESSES:
+            HOTKEY_PRESSES.clear()   # 一次按键可能连发几个事件，合并成一次
+            self.toggle_visible()
         if self.hidden:
-            self.root.after(120, self.hover_poll)
+            self.root.after(60, self.hover_poll)
             return
         try:
             px, py = self.root.winfo_pointerxy()
