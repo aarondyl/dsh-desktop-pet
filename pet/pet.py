@@ -360,7 +360,63 @@ _KEEP: list = []        # 交给 Objective-C 的 Python 回调必须一直持有
 # （⌥Space 是 Codex 的默认键，装了 Codex 就会被占，退到 ⌃⌥Space）。
 # Carbon 修饰键：cmdKey 256，shiftKey 512，optionKey 2048，controlKey 4096；49 = 空格键。
 HOTKEYS = [("⌥Space", 49, 2048), ("⌃⌥Space", 49, 2048 | 4096)]
+HANDLE = 22              # 隐藏时留下的小圆点：窗口边长（圆点本体 14）
+HANDLE_ALPHA = 0.45      # 平时半透明；鼠标放上去变成不透明
 HOTKEY_PRESSES: list = []   # 快捷键回调只往这里记一笔，hover_poll 取走后再动界面
+
+
+# 访达右键菜单扩展（finder-menu/）发来的指令：show / hide / toggle / ask。
+# 扩展在沙盒里，只能用「分布式通知」和小深说话；回调同样只记一笔。
+EXTERNAL_CMDS: list = []
+NOTE_TOGGLE = "com.xiaoshen.pet.toggle"
+NOTE_ASK = "com.xiaoshen.pet.ask"
+NOTE_STATE = "com.xiaoshen.pet.state"
+
+
+class _DistNotes:
+    """CoreFoundation 的分布式通知中心：收扩展的指令，广播小深现在显示还是隐藏。"""
+
+    def __init__(self):
+        import ctypes as C
+        self.C = C
+        cf = C.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        self.cf = cf
+        cf.CFNotificationCenterGetDistributedCenter.restype = C.c_void_p
+        cf.CFStringCreateWithCString.argtypes = [C.c_void_p, C.c_char_p, C.c_uint32]
+        cf.CFStringCreateWithCString.restype = C.c_void_p
+        cf.CFStringGetCString.argtypes = [C.c_void_p, C.c_char_p, C.c_long, C.c_uint32]
+        cf.CFStringGetCString.restype = C.c_bool
+        self.CB = C.CFUNCTYPE(None, C.c_void_p, C.c_void_p, C.c_void_p, C.c_void_p, C.c_void_p)
+        cf.CFNotificationCenterAddObserver.argtypes = [C.c_void_p, C.c_void_p, self.CB, C.c_void_p, C.c_void_p, C.c_long]
+        cf.CFNotificationCenterPostNotification.argtypes = [C.c_void_p, C.c_void_p, C.c_void_p, C.c_void_p, C.c_bool]
+        self.center = cf.CFNotificationCenterGetDistributedCenter()
+        self._strs = {}
+
+    def cfstr(self, text: str):
+        if text not in self._strs:   # 常驻：CF 字符串交出去以后不释放
+            self._strs[text] = self.cf.CFStringCreateWithCString(None, text.encode(), 0x08000100)
+        return self._strs[text]
+
+    def pystr(self, ref) -> str:
+        if not ref:
+            return ""
+        buf = self.C.create_string_buffer(64)
+        return buf.value.decode() if self.cf.CFStringGetCString(ref, buf, 64, 0x08000100) else ""
+
+    def listen(self) -> None:
+        def on_note(_center, _observer, name, obj, _info):
+            # 同 HOTKEY_PRESSES：这是在 Tk 事件循环里被调用的，绝不能碰 Tk
+            n = self.pystr(name)
+            EXTERNAL_CMDS.append("ask" if n == NOTE_ASK else (self.pystr(obj) or "toggle"))
+        cb = self.CB(on_note)
+        _KEEP.append(cb)
+        for name in (NOTE_TOGGLE, NOTE_ASK):
+            # 4 = CFNotificationSuspensionBehaviorDeliverImmediately：小深在后台也立即送达
+            self.cf.CFNotificationCenterAddObserver(self.center, None, cb, self.cfstr(name), None, 4)
+
+    def post_state(self, hidden: bool) -> None:
+        self.cf.CFNotificationCenterPostNotification(
+            self.center, self.cfstr(NOTE_STATE), self.cfstr("hidden" if hidden else "shown"), None, True)
 
 
 def register_hotkey() -> str | None:
@@ -871,6 +927,7 @@ class Pet:
         self._ticks = 0
         self._move_job = None
         self._btn_prev = False
+        self._handle_hot = None
         self.solid: list[tuple] = []      # 画出来的实体区域（窗口坐标）；其余透明处鼠标穿透
         self._through = False             # 当前是否 ignoresMouseEvents
         self.down = True
@@ -921,8 +978,19 @@ class Pet:
         self.menu.add_separator()
         self.hidden = False
         self.hotkey = register_hotkey()
+        try:
+            self.notes = _DistNotes()
+            self.notes.listen()
+        except Exception:
+            self.notes = None
         self.menu.add_command(label="隐藏桌面助手", accelerator=self.hotkey or "", command=self.hide)
         self.menu.add_command(label="退出小深", command=self.quit)
+        # 隐藏时右键小圆点的菜单
+        self.menu_hidden = tk.Menu(self.root, tearoff=0)
+        self.menu_hidden.add_command(label="显示桌面助手", accelerator=self.hotkey or "",
+                                     command=lambda: self.show(focus=False))
+        self.menu_hidden.add_separator()
+        self.menu_hidden.add_command(label="退出小深", command=self.quit)
 
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         st = self.state
@@ -994,6 +1062,9 @@ class Pet:
     def render(self) -> None:
         """整窗重画。只在状态变化时调用；动画（声波、打字机、悬停）都是增量更新。"""
         c = self.canvas
+        if self.hidden:
+            self._render_handle()
+            return
         blocks, stack = self._blocks()
         gap = 8
         wide = bool(blocks) or self.mode == "input"
@@ -1044,6 +1115,38 @@ class Pet:
         if sp:
             self._draw_sprite(sp, bar_left + cw - 6 - sp["w"], bar_y + BAR_H - 4 - sp["h"])
         self._draw_hover()
+
+    def _render_handle(self) -> None:
+        """隐藏时：在原来胶囊右端的位置留一个小圆点（第十七轮 · 方案 C）。
+        右键它 →「显示桌面助手」，单击也显示；可以拖动。窗口不收起来，所以层级不会掉。"""
+        c = self.canvas
+        d = HANDLE
+        bar_y = -(BAR_H - d) // 2            # 圆点和胶囊的竖直中线对齐
+        sw = self.root.winfo_screenwidth()
+        x = max(0, min(self.anchor[0] - d, sw - d))
+        y = max(0, self.anchor[1] - bar_y)
+        self._win = (d, d, bar_y)
+        self.root.geometry(f"{d}x{d}+{x}+{y}")
+        c.config(width=d, height=d)
+        c.delete("all")
+        self.zones, self.icon_xy, self.boxes, self.solid = [], {}, {}, []
+        r = 7
+        cx = cy = d / 2
+        c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=CARD, outline=BORDER, width=1)
+        c.create_oval(cx - 2.5, cy - 2.5, cx + 2.5, cy + 2.5, fill=MUTED, outline="")
+        box = (cx - r - 2, cy - r - 2, cx + r + 2, cy + r + 2)
+        self.solid.append(box)
+        self.zones.append(("handle", *box))
+        self._set_handle_alpha(False)
+
+    def _set_handle_alpha(self, hot: bool) -> None:
+        if getattr(self, "_handle_hot", None) == hot:
+            return
+        self._handle_hot = hot
+        try:
+            self.root.attributes("-alpha", 1.0 if hot else HANDLE_ALPHA)
+        except tk.TclError:
+            pass
 
     def sprite(self) -> dict | None:
         cid = chosen_companion()
@@ -1612,7 +1715,9 @@ class Pet:
         key = self.hit(event.x, event.y)
         kind, _, idx = (key or "").partition(":")
         t = self.tasks[int(idx)] if idx.isdigit() and int(idx) < len(self.tasks) else self.front
-        if key in ("edit", "buddy"):
+        if key == "handle":
+            self.show(focus=False)
+        elif key in ("edit", "buddy"):
             self.open_input(None)
         elif key == "wave":
             self.open_input(self.front if self.front and not self.cards_hidden else None)
@@ -1645,7 +1750,7 @@ class Pet:
     def on_menu(self, event) -> None:
         self._modal += 1
         try:
-            self.menu.tk_popup(event.x_root, event.y_root)
+            (self.menu_hidden if self.hidden else self.menu).tk_popup(event.x_root, event.y_root)
         finally:
             self.menu.grab_release()
             self.root.after(300, self._end_modal)
@@ -1663,9 +1768,10 @@ class Pet:
         self.panel_open = self.list_open = False
         self.hover = None
         self.hidden = True
-        self._set_click_through(False)
-        self.root.withdraw()
+        self._handle_hot = None
+        self.render()          # 缩成小圆点（见 render 开头）
         self.save()
+        self._post_state()
 
     def show(self, focus: bool = True) -> None:
         """叫出来；focus=True 时顺手打开输入栏（像 Codex 的 ⌥Space：显示并聚焦）。"""
@@ -1674,13 +1780,22 @@ class Pet:
                 self.open_input(None)
             return
         self.hidden = False
-        self.root.deiconify()
-        self.root.update_idletasks()
-        make_chromeless(self.root)   # deiconify 会把层级、标题栏样式改回去，和截图回来时一样重新设一遍
+        try:
+            self.root.attributes("-alpha", 1.0)
+        except tk.TclError:
+            pass
         self.render()
         if focus:
             self.open_input(None)
         self.save()
+        self._post_state()
+
+    def _post_state(self) -> None:
+        if self.notes is not None:
+            try:
+                self.notes.post_state(self.hidden)
+            except Exception:
+                pass
 
     def toggle_visible(self) -> None:
         if self.hidden:
@@ -1917,9 +2032,16 @@ class Pet:
         if HOTKEY_PRESSES:
             HOTKEY_PRESSES.clear()   # 一次按键可能连发几个事件，合并成一次
             self.toggle_visible()
-        if self.hidden:
-            self.root.after(60, self.hover_poll)
-            return
+        while EXTERNAL_CMDS:
+            cmd = EXTERNAL_CMDS.pop(0)
+            if cmd == "show":
+                self.show(focus=False)
+            elif cmd == "hide":
+                self.hide()
+            elif cmd == "toggle":
+                self.toggle_visible() if not self.hidden else self.show(focus=False)
+            else:
+                self._post_state()   # "ask"：访达扩展刚启动，问现在的状态（show/hide 自己会广播）
         try:
             px, py = self.root.winfo_pointerxy()
             lx, ly = px - self.root.winfo_rootx(), py - self.root.winfo_rooty()
@@ -1927,6 +2049,8 @@ class Pet:
             in_win = 0 <= lx < w and 0 <= ly < h
             solid = in_win and any(x1 <= lx <= x2 and y1 <= ly <= y2
                                    for x1, y1, x2, y2 in self.solid)
+            if self.hidden:
+                self._set_handle_alpha(solid or self._drag is not None)
             if self._drag is not None or self._modal:
                 self._set_click_through(False)
             elif in_win:
